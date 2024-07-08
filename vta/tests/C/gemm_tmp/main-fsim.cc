@@ -11,9 +11,9 @@
 
 // GEMM Funciton
 // Inp [M, K] x Wgt [N, K] = Out [M，N] 
-int32_t M = 128;
-int32_t N = 128;
-int32_t K = 128;
+int32_t M = 256;
+int32_t N = 16;
+int32_t K = 16;
 
 //VTA Parameters
 int32_t BATCH = 1;
@@ -108,62 +108,62 @@ void** tvm_static_handle3 = &null_ptr3;
 void** tvm_static_handle4 = &null_ptr4;
 
 int32_t tvm_static_init_lambda0(void *ptr){
-    VTAUopLoopBegin(128, 8, 0, 0);
-    VTAUopLoopBegin(8, 1, 0, 0);
+    //最小操作单元acc[1*16]
+    //[256*16] = 256 * [[16/16=1]*[1*16]] 
+    VTAUopLoopBegin(256, 1, 0, 0);
+    VTAUopLoopBegin(1, 1, 0, 0);
     VTAUopPush(0, 1, 0, 0, 0, 0, 0, 0);
     VTAUopLoopEnd();
     VTAUopLoopEnd(); 
     return 0;
 }
-
+//
 int32_t tvm_static_init_lambda1(void *ptr){
-    VTAUopLoopBegin(8, 0, 1, 1);
-    VTAUopLoopBegin(128, 8, 8, 0);
-    for (int32_t co=0; co<8; co++){
-        VTAUopPush(0, 0, co, 0, (co*8), 0, 0, 0);
-    }
+    VTAUopLoopBegin(1, 0, 1, 1);
+    VTAUopLoopBegin(256, 1, 1, 0);
+    VTAUopPush(0, 0, 0, 0, 0, 0, 0, 0);
     VTAUopLoopEnd();
     VTAUopLoopEnd();
     return 0;
 }
-
+//acc >> 8 256*16/16 = 256
 int32_t tvm_static_init_lambda2(void *ptr){
-    VTAUopLoopBegin(1024, 1, 1, 0);
+    VTAUopLoopBegin(256, 1, 1, 0);
     VTAUopPush(1, 0, 0, 0, 0, 3, 1, 8);
     VTAUopLoopEnd();
     return 0;
 }
-
+//>0
 int32_t tvm_static_init_lambda3(void *ptr){
-    VTAUopLoopBegin(1024, 1, 1, 0);
+    VTAUopLoopBegin(256, 1, 1, 0);
     VTAUopPush(1, 0, 0, 0, 0, 1, 1, 0);
     VTAUopLoopEnd();
     return 0;
 }
-
+//<127
 int32_t tvm_static_init_lambda4(void *ptr){
-    VTAUopLoopBegin(1024, 1, 1, 0);
+    VTAUopLoopBegin(256, 1, 1, 0);
     VTAUopPush(1, 0, 0, 0, 0, 0, 1, 127);
     VTAUopLoopEnd();
     return 0;
 }
 
 void gemm_vta(int8_t *gA, int8_t *gB, int8_t *gC){
-    void *lA = VTABufferAlloc(128*128);
-    void *lB = VTABufferAlloc(128*128);
-    void *lC = VTABufferAlloc(128*128);
+    void *lA = VTABufferAlloc(256*16);
+    void *lB = VTABufferAlloc(16*16);
+    void *lC = VTABufferAlloc(256*16);
 
     //1.copy from gA/B to lA/B (shared memory)
-    VTABufferCopy(gA, 0, lA, 0, 128*128, 1);
-    VTABufferCopy(gB, 0, lB, 0, 128*128, 1);
+    VTABufferCopy(gA, 0, lA, 0, 256*16, 1);
+    VTABufferCopy(gB, 0, lB, 0, 16*16, 1);
 
     //Prepare Data
     VTACommandHandle ctx_cache_ =VTATLSCommandHandle();
     VTAPushGEMMOp(tvm_static_handle0, tvm_static_init_lambda0, NULL, 0); 
     VTADepPush(ctx_cache_, 2, 1);
     VTADepPop(ctx_cache_, 2, 1);
-    VTALoadBuffer2D(ctx_cache_, lA, 0, 1024, 1, 1024, 0, 0, 0, 0, 0, 2);
-    VTALoadBuffer2D(ctx_cache_, lB, 0, 64, 1, 64, 0, 0, 0, 0, 0, 1);
+    VTALoadBuffer2D(ctx_cache_, lA, 0, 256, 1, 256, 0, 0, 0, 0, 0, 2);//256*16/16=256
+    VTALoadBuffer2D(ctx_cache_, lB, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1);//from [16*16] load [16*16] each time. 1=(16/16)*(16/16)
     VTADepPush(ctx_cache_, 1, 2);
     VTADepPop(ctx_cache_, 1, 2); 
     VTAPushGEMMOp(tvm_static_handle1, tvm_static_init_lambda1, NULL, 0);
@@ -172,7 +172,7 @@ void gemm_vta(int8_t *gA, int8_t *gB, int8_t *gC){
     VTAPushALUOp(tvm_static_handle4, tvm_static_init_lambda4, NULL, 0);
     VTADepPush(ctx_cache_, 2, 3);
     VTADepPop(ctx_cache_, 2, 3); 
-    VTAStoreBuffer2D(ctx_cache_, 0, 4, lC, 0, 1024, 1, 1024);
+    VTAStoreBuffer2D(ctx_cache_, 0, 4, lC, 0, 256, 1, 256);
     VTASynchronize(ctx_cache_, (uint32_t)2147483648);
     
     //2:copy from lC to gC
@@ -210,7 +210,7 @@ int32_t main(int32_t argc, char** argv){
     printf("Call Gemm_VTA Implementation\n");   
     gemm_vta(inp, wgt, opt);
     printf("Compare Gemm_VTA Output with Reference\n");
-    for (int32_t i=0; i<16; i++) {
+    for (int32_t i=0; i<M*N; i++) {
         if (opt[i] != res[i]){
             printf("%d: %d %d\n",i ,opt[i],res[i]);
         }
